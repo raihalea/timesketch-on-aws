@@ -1,0 +1,17 @@
+export interface TimesketchConfig {
+  USER: string;
+  PASS: string;
+}
+
+export const timesketchConfig:TimesketchConfig = {
+  USER: 'admin',
+  PASS: 'ch@ngeme!'
+}
+
+export interface AccessIpConfig {
+  IPADDR: string;
+}
+
+export const accessIpConfig:AccessIpConfig = {
+  IPADDR: '192.168.2.1/32'
+}

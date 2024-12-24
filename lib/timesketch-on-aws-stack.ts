@@ -13,10 +13,15 @@ import {
   InstanceSize,
   InstanceType,
   MachineImage,
+  Peer,
+  Port,
+  ServiceManager,
   SubnetType,
   Vpc,
 } from "aws-cdk-lib/aws-ec2";
 import { Construct } from "constructs";
+
+import { accessIpConfig, timesketchConfig } from "./config";
 
 export class TimesketchOnAwsStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -31,34 +36,12 @@ export class TimesketchOnAwsStack extends cdk.Stack {
       ],
     });
 
-    // const bootHookConf = UserData.forLinux();
-    // bootHookConf.addCommands('cloud-init-per once docker_options echo \'OPTIONS="${OPTIONS} --storage-opt dm.basesize=40G"\' >> /etc/sysconfig/docker');
-
-    // const setupCommands = UserData.forLinux();
-    // setupCommands.addCommands('sudo yum install awscli docker  && echo Packages installed らと > /var/tmp/setup');
-
-    // const setupDocker = UserData.forLinux();
-    // setupDocker.addCommands('sudo yum install docker && echo Packages installed らと > /var/tmp/setup');
-
-    // const multipartUserData = new MultipartUserData();
-    // // The docker has to be configured at early stage, so content type is overridden to boothook
-    // multipartUserData.addPart(MultipartBody.fromUserData(bootHookConf, 'text/cloud-boothook; charset="us-ascii"'));
-    // // Execute the rest of setup
-    // multipartUserData.addPart(MultipartBody.fromUserData(setupCommands));
-
-    // // new LaunchTemplate(this, '', {
-    // //   userData: multipartUserData,
-    // //   blockDevices: [
-    // //     // Block device configuration rest
-    // //   ]
-    // // });
-
     const handle = new InitServiceRestartHandle();
     const instance = new Instance(this, "Instance", {
       vpc,
-      instanceType: InstanceType.of(InstanceClass.C7G, InstanceSize.LARGE),
+      instanceType: InstanceType.of(InstanceClass.C7I, InstanceSize.XLARGE),
       machineImage: MachineImage.latestAmazonLinux2023({
-        cpuType: AmazonLinuxCpuType.ARM_64,
+        cpuType: AmazonLinuxCpuType.X86_64,
       }),
       ebsOptimized: true,
       blockDevices: [
@@ -78,6 +61,7 @@ export class TimesketchOnAwsStack extends cdk.Stack {
             InitPackage.yum('docker'),
             InitService.enable("docker", { serviceRestartHandle: handle }),
             InitCommand.shellCommand('usermod -aG docker ec2-user'),
+            InitCommand.shellCommand('newgrp docker'),
             InitCommand.shellCommand('mkdir -p /usr/local/lib/docker/cli-plugins'),
             InitCommand.shellCommand('curl -L "https://github.com/docker/compose/releases/download/v2.27.0/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/lib/docker/cli-plugins/docker-compose'),
             InitCommand.shellCommand('chmod +x /usr/local/lib/docker/cli-plugins/docker-compose'),
@@ -87,30 +71,34 @@ export class TimesketchOnAwsStack extends cdk.Stack {
               'curl -s -o /tmp/deploy_timesketch.sh https://raw.githubusercontent.com/google/timesketch/master/contrib/deploy_timesketch.sh'
             ),
             InitCommand.shellCommand("chmod +x /tmp/deploy_timesketch.sh"),
-            // InitCommand.shellCommand("cd /opt && /tmp/deploy_timesketch.sh --start-container"),
+            InitCommand.shellCommand("/tmp/deploy_timesketch.sh --start-container --skip-create-user"),
 
-            // InitService.systemdConfigFile('timesketch',{
-            //   command: '/usr/bin/docker compose -p timesketch -f /opt/timesketch',
-            //   cwd: '/opt/timesketch',
-            //   description: 'timesketch',
-            // }),
+            InitService.systemdConfigFile('timesketch',{
+              command: '/usr/bin/docker compose -f /timesketch/docker-compose.yml up',
+              cwd: '/timesketch',
+              description: 'timesketch',
+            }),
 
-            // InitCommand.shellCommand(
-            //   "cd /opt/timesketch && docker compose up -d"
-            // ),
+            InitService.enable("timesketch", {
+              serviceManager: ServiceManager.SYSTEMD
+            }),
 
-            // Create the first Timesketch user (replace <USERNAME> with actual username)
-            // InitCommand.shellCommand(
-            //   "cd /opt/timesketch && sudo docker-compose exec timesketch-web tsctl create-user admin"
-            // ),
+            // Create the first Timesketch user (replace USERNAME with actual username)
+            InitCommand.shellCommand(
+              `cd /timesketch && docker compose exec timesketch-web tsctl create-user ${timesketchConfig.USER} --password ${timesketchConfig.PASS}`
+            ),
 
-            // // Enable Timesketch to start on boot
-            // InitCommand.shellCommand(
-            //   'echo "@reboot cd /opt/timesketch && sudo docker-compose up -d" | sudo tee -a /etc/crontab'
-            // ),
           ]),
         },
       }),
     });
+
+    // replace your global ip address
+    instance.connections.allowFrom(Peer.ipv4(accessIpConfig.IPADDR),Port.HTTP)
+
+    new cdk.CfnOutput(this, 'url', {
+      value: `http://${instance.instancePublicIp}`,
+    })
+
   }
 }
